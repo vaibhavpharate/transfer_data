@@ -52,6 +52,7 @@ variable_folders = [str(x)[:-1] for x in variable_folders]
 variable_files = seperate_files(variable_folders)
 
 
+
 transfer_files(variable_files=variable_files,
                df=df,ssh_client=ssh_client,
                latest_date=latest_date,
