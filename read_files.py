@@ -18,7 +18,7 @@ logging.basicConfig(filename="logs/read_files.log",
 # Creating an object
 logger = logging.getLogger()
 # Setting the threshold of logger to DEBUG
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 
@@ -38,13 +38,6 @@ folder_format = "%Y%m%d"
 file_timestamp = folder_format+"T%H%M00Z"
 
 
-variable_atts = {'CTTH':['ctth_pres', 'ctth_alti', 'ctth_tempe', 'ctth_effectiv', 'ctth_method', 'ctth_status_flag'],
- 'CMA':['cma_cloudsnow', 'cma', 'cma_dust', 'cma_volcanic', 'cma_smoke', 'cma_testlist1', 'cma_testlist2', 'cma_status_flag', 'cma_conditions'],
- 'CRRPh':['crrph_intensity', 'crrph_accum', 'crrph_status_flag', 'crrph_conditions'],
- 'CMIC':['cmic_phase', 'cmic_reff', 'cmic_cot', 'cmic_lwp', 'cmic_iwp', 'cmic_status_flag', 'cmic_conditions'],
- 'CRR':['crr', 'crr_intensity', 'crr_accum', 'crr_status_flag', 'crr_conditions'],
- 'CT':['ct']
-}
 
 def read_transfer_files_logs(tf_log_path:str):
     if os.path.exists(tf_log_path):
@@ -55,23 +48,7 @@ def read_transfer_files_logs(tf_log_path:str):
         logger.error("There is no transfer logs file please execute transfer files script")
     
 
-
-
-## Check for the data folders
-trf_df = read_transfer_files_logs(transfer_files_log)
-tracker_df = trf_df.copy()
-tracker_df['date'] = pd.to_datetime(tracker_df['timestamp'].dt.date)
-tracker_df['file_path'] = destination_path +"/"+tracker_df['date'].dt.strftime(folder_format) + "/" + tracker_df['file']
-# print(trf_df)
-
-
-db_connection = get_connection(host = data_configs_local['host'],
-                              port = data_configs_local['port'],
-                              user = data_configs_local['user'],
-                              passord= data_configs_local['password'],
-                              database= data_configs_local['database'])
-
-def check_if_data_exists(timestamp):
+def check_if_data_exists(timestamp,db_connection):
     df = pd.read_sql_query(f"SELECT COUNT(*) FROM haleware.satellite_data WHERE timestamp = '{timestamp}'"
                            ,db_connection)
     print(df['count'])
@@ -83,8 +60,8 @@ def check_if_data_exists(timestamp):
 
 
 ## This will read the infividual files
-def data_to_database(timestamp,file_path,db_connection):
-    # if check_if_data_exists(timestamp=timestamp):
+def data_to_database(timestamp,file_path,db_connection,trf_df,variable_atts):
+    # if check_if_data_exists(timestamp=timestamp,db_connection = db_connection):
         timestamp = str(timestamp)
 
         if os.path.exists(file_path):
@@ -114,11 +91,6 @@ def data_to_database(timestamp,file_path,db_connection):
         trf_df.to_csv(transfer_files_log,index=False)
 
 
-transfer_df = tracker_df.loc[trf_df['read_status']==0,:]
-for index, row in transfer_df.iterrows():
-    data_to_database(timestamp=row['timestamp'],
-                 file_path=row['file_path'],
-                 db_connection=db_connection)
 
 
 

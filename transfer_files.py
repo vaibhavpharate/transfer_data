@@ -3,36 +3,9 @@ import numpy as np
 import os
 import paramiko
 from datetime import datetime
-
-import logging
-
- 
-# Create and configure logger
-logging.basicConfig(filename="logs/files.log",
-                    format='%(asctime)s %(levelname)s %(message)s',
-                    filemode='a+')
-
-
-# Creating an object
-logger = logging.getLogger()
-# Setting the threshold of logger to DEBUG
-logger.setLevel(logging.INFO)
-# user defined modules
+import shutil
 from configs.paths import *
 
-# 20231208
-
-folder_format = "%Y%m%d"
-file_timestamp = folder_format+"T%H%M00Z"
-
-
-# Get the logging csv
-logger_path = 'logs/transfer.csv'
-if os.path.exists(logger_path):
-    df = pd.read_csv(logger_path)
-else:
-    df = pd.DataFrame({'timestamp':[],'variable':[],'status':[],'log_ts':[],'file':[],'read_status':[]})
-    df.to_csv(logger_path,index=False)
 
 def get_ssh():
     ssh = paramiko.SSHClient() ## Create the SSH object
@@ -46,11 +19,7 @@ def get_ssh():
         print("Connected Securely to the Source Server")
     return ssh
 
-
-
-
-
-def choose_latest_date(ssh_client,logger=logger):
+def choose_latest_date(ssh_client,logger,source_path,folder_format):
     stdin, stdout, stderr = ssh_client.exec_command(f'ls {source_path}')
     date_folder_list = stdout.readlines()
     date_folder_list = [str(x)[:-1] for x in date_folder_list]
@@ -89,10 +58,16 @@ def seperate_files(files_list):
 
 
 
-def transfer_files(ssh_client,variable_files:list,df:pd.DataFrame,latest_date:str,logger=logger):
+def transfer_files(ssh_client,variable_files:list,df:pd.DataFrame,latest_date:str,logger,file_timestamp:str):
     sftp_client = ssh_client.open_sftp()
     if os.path.exists(f'{destination_path}/{latest_date}')==False:
         os.makedirs(f'{destination_path}/{latest_date}')
+        
+    lst_folders = list(os.walk(f'{destination_path}'))[0][1]
+    for x in lst_folders:
+        if x != latest_date:
+            print(f"Removing older folder {x}")
+            shutil.rmtree(f'{destination_path}/{x}', ignore_errors=True)
     for x in variable_files:
         timstmp = datetime.strptime(x[:-3].split('_')[-1],file_timestamp)
         variable = 'CT'
@@ -111,12 +86,3 @@ def transfer_files(ssh_client,variable_files:list,df:pd.DataFrame,latest_date:st
     df.to_csv('logs/transfer.csv',index=False)
 
 
-
-ssh_client = get_ssh()
-latest_date = choose_latest_date(ssh_client=ssh_client)
-# get all the variable files list in the latest date
-stdin, stdout, stderr = ssh_client.exec_command(f'ls {source_path}/{latest_date}')
-variable_folders = stdout.readlines()
-variable_folders = [str(x)[:-1] for x in variable_folders]
-variable_files = seperate_files(variable_folders)
-transfer_files(variable_files=variable_files,df=df,ssh_client=ssh_client,latest_date=latest_date)
