@@ -1,84 +1,136 @@
-from transfer_files import *
-from read_files import *
+from datetime import datetime, timedelta
+import pandas as pd
+import numpy as np
+import netCDF4 as nc
 import logging
+import os
 
+from sqlalchemy import text
+
+from configs.paths import destination_path, destination_ip,directory_path
+from configs.db_conf import *
+from database_funcs import get_connection, get_ci_ct_map
+
+ 
 # Create and configure logger
-logging.basicConfig(filename="logs/files.log",
+logging.basicConfig(filename=f"{directory_path}/logs/read_files.log",
                     format='%(asctime)s %(levelname)s %(message)s',
                     filemode='a+')
-
-
+ 
 # Creating an object
 logger = logging.getLogger()
 # Setting the threshold of logger to DEBUG
 logger.setLevel(logging.INFO)
-# user defined modules
+read_files_log = f'{directory_path}/logs/read_file.csv'
+transfer_files_log = f'{directory_path}/logs/transfer.csv'
+# 
 
+#read_files_log = 'logs/read_file.csv'
+#transfer_files_log = 'logs/transfer.csv'
+
+
+if os.path.exists(read_files_log)==False:
+    df = pd.DataFrame({'timestamp':[],'variable':[],'status':[],'log_ts':[]})
+    df.to_csv(read_files_log)
+else:
+    df = pd.read_csv(read_files_log)
+
+# read_variables = ['CMA','CT','CMIC','CRR','CRRPh','CTTH']
+read_variables = ['CT']
 folder_format = "%Y%m%d"
 file_timestamp = folder_format+"T%H%M00Z"
 
 
-# Get the logging csv
-logger_path = 'logs/transfer.csv'
-if os.path.exists(logger_path):
-    df = pd.read_csv(logger_path)
-else:
-    df = pd.DataFrame({'timestamp':[],'variable':[],'status':[],'log_ts':[],'file':[],'read_status':[]})
-    df.to_csv(logger_path,index=False)
+
+def read_transfer_files_logs(tf_log_path:str):
+    if os.path.exists(tf_log_path):
+        transfer_logs = pd.read_csv(tf_log_path)
+        transfer_logs['timestamp'] = pd.to_datetime(transfer_logs['timestamp'],format="%Y-%m-%d %H:%M:%S")
+        return transfer_logs
+    else:
+        logger.error("There is no transfer logs file please execute transfer files script")
+    
+
+def check_if_data_exists(timestamp,db_connection):
+    df = pd.read_sql_query(f"SELECT COUNT(*) FROM haleware.satellite_data WHERE timestamp = '{timestamp}'"
+                           ,db_connection)
+    print(df['count'])
+    if df['count'][0] > 0:
+        return False
+    else:
+        return True
+    # return df
+
+
+## This will read the infividual files
+def data_to_database(timestamp,file_path,db_connection,trf_df,variable_atts):
+    if True:
+        timestamp = str(timestamp)
+        previous_48 = datetime.strptime(timestamp,'%Y-%m-%d %H:%M:%S') - timedelta(hours=48)
+        previous_48 = previous_48.strftime(format='%Y-%m-%d %H:%M:%S')
+        ct_data={1: 'Cloud-free_land',
+            5: 'Very_low_clouds',
+            6: 'Low_clouds',
+            7: 'Mid-level_clouds',
+            8: 'High_opaque_clouds',
+            9: 'Very_high_opaque_clouds',
+            10: 'Fractional_clouds',
+            11: 'High_semitransparent_thin_clouds',
+            12: 'High_semitransparent_moderately_thick_clouds',
+            13: 'High_semitransparent_thick_clouds',
+            14: 'High_semitransparent_above_low_or_medium_clouds',
+            2: 'Cloud-free_sea',
+            3: 'Snow_over_land',
+            4: 'Sea_ice'}
+        
+        home_conn = get_connection(host = conn_dict['host'],
+                              port = conn_dict['port'],
+                              user = conn_dict['user'],
+                              passord= conn_dict['password'],
+                              database= conn_dict['database'])
+
+        try:
+            with db_connection.connect() as conn:
+                conn.execute(text(f"DELETE FROM haleware.satellite_data  WHERE timestamp <='{previous_48}'"))
+                print(f"Deleted Data Before and including timestamp {previous_48}")
+        except Exception as e:
+            print(e)
+        if os.path.exists(file_path):
+
+            data = nc.Dataset(file_path)
+            df = pd.DataFrame()
+            ## Setting up the timestamp, lat and l	            
+            df['lat'] = np.array(data.variables['lat'][:]).flatten()
+            df['lon'] = np.array(data.variables['lon'][:]).flatten()
+            df['timestamp'] = timestamp
+
+            # db_connection_2 = get_connection()
+
+            ci_ct_map = get_ci_ct_map(db_connection=home_conn)
+            ## Delete the previous_timestamps of 48 hours before
+
+            for i in variable_atts['CT']:
+                df[i] = np.array(data.variables[i][:]).flatten()
+            try:
+                df['ct_flag'] = df['ct'].apply(lambda x: ct_data[x])
+                df['ci_data'] = df['ct_flag'].apply(lambda x:ci_ct_map[x])
+                # print(df)
+
+                if check_if_data_exists(timestamp=timestamp,db_connection=db_connection):
+                    df.to_sql(name='satellite_data',schema='haleware',if_exists='append',index=False,con=db_connection)
+                    trf_df.loc[trf_df['timestamp']==timestamp,'read_status'] = 1 
+                    logger.info(f"Transfered Data for timestamp {timestamp}")
+                else:
+                    logger.warning(f"Data for timestamp {timestamp} already exists")
+                
+                
+            except Exception as e:
+                logger.warning(f"Error Occured {e}")
+                print(e)
+        else:
+            print("File Does not exists")
+        
+        trf_df.to_csv(transfer_files_log,index=False)
 
 
 
-
-read_variables = ['CT',]
-
-variable_atts = {'CTTH':['ctth_pres', 'ctth_alti', 'ctth_tempe', 'ctth_effectiv', 'ctth_method', 'ctth_status_flag'],
- 'CMA':['cma_cloudsnow', 'cma', 'cma_dust', 'cma_volcanic', 'cma_smoke', 'cma_testlist1', 'cma_testlist2', 'cma_status_flag', 'cma_conditions'],
- 'CRRPh':['crrph_intensity', 'crrph_accum', 'crrph_status_flag', 'crrph_conditions'],
- 'CMIC':['cmic_phase', 'cmic_reff', 'cmic_cot', 'cmic_lwp', 'cmic_iwp', 'cmic_status_flag', 'cmic_conditions'],
- 'CRR':['crr', 'crr_intensity', 'crr_accum', 'crr_status_flag', 'crr_conditions'],
- 'CT':['ct']
-}
-
-
-ssh_client = get_ssh()
-latest_date = choose_latest_date(ssh_client=ssh_client,
-                                 folder_format=folder_format,
-                                 source_path=source_path,
-                                 logger=logger)
-# get all the variable files list in the latest date
-stdin, stdout, stderr = ssh_client.exec_command(f'ls {source_path}/{latest_date}')
-variable_folders = stdout.readlines()
-variable_folders = [str(x)[:-1] for x in variable_folders]
-variable_files = seperate_files(variable_folders)
-
-
-
-transfer_files(variable_files=variable_files,
-               df=df,ssh_client=ssh_client,
-               latest_date=latest_date,
-               logger=logger,
-               file_timestamp=file_timestamp)
-
-## Check for the data folders
-trf_df = read_transfer_files_logs(transfer_files_log)
-tracker_df = trf_df.copy()
-tracker_df['date'] = pd.to_datetime(tracker_df['timestamp'].dt.date)
-tracker_df['file_path'] = destination_path +"/"+tracker_df['date'].dt.strftime(folder_format) + "/" + tracker_df['file']
-# print(trf_df)
-
-
-db_connection = get_connection(host = data_configs_local['host'],
-                              port = data_configs_local['port'],
-                              user = data_configs_local['user'],
-                              passord= data_configs_local['password'],
-                              database= data_configs_local['database'])
-
-
-
-transfer_df = tracker_df.loc[trf_df['read_status']==0,:]
-for index, row in transfer_df.iterrows():
-    data_to_database(timestamp=row['timestamp'],
-                 file_path=row['file_path'],
-                 db_connection=db_connection,
-                 trf_df=trf_df,
-                 variable_atts=variable_atts)
